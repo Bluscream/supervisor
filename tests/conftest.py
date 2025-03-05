@@ -39,6 +39,7 @@ from supervisor.const import (
     ATTR_TYPE,
     ATTR_VERSION,
     REQUEST_FROM,
+    CoreState,
 )
 from supervisor.coresys import CoreSys
 from supervisor.dbus.network import NetworkManager
@@ -96,21 +97,16 @@ async def docker() -> DockerAPI:
             "supervisor.docker.manager.DockerAPI.info",
             return_value=MagicMock(),
         ),
-        patch(
-            "supervisor.docker.manager.DockerConfig",
-            return_value=MagicMock(),
-        ),
         patch("supervisor.docker.manager.DockerAPI.unload"),
     ):
         docker_obj = DockerAPI(MagicMock())
+        docker_obj.config._data = {"registries": {}}
         with patch("supervisor.docker.monitor.DockerMonitor.load"):
             await docker_obj.load()
 
         docker_obj.info.logging = "journald"
         docker_obj.info.storage = "overlay2"
         docker_obj.info.version = "1.0.0"
-
-        docker_obj.config.registries = {}
 
         yield docker_obj
 
@@ -312,30 +308,32 @@ async def coresys(
     dbus_session_bus,
     all_dbus_services,
     aiohttp_client,
-    run_dir,
+    run_supervisor_state,
     supervisor_name,
 ) -> CoreSys:
     """Create a CoreSys Mock."""
     with (
         patch("supervisor.bootstrap.initialize_system"),
         patch("supervisor.utils.sentry.sentry_sdk.init"),
+        patch("supervisor.core.Core._write_run_state"),
     ):
         coresys_obj = await initialize_coresys()
 
     # Mock save json
-    coresys_obj._ingress.save_data = MagicMock()
-    coresys_obj._auth.save_data = MagicMock()
-    coresys_obj._updater.save_data = MagicMock()
-    coresys_obj._config.save_data = MagicMock()
-    coresys_obj._jobs.save_data = MagicMock()
-    coresys_obj._resolution.save_data = MagicMock()
-    coresys_obj._addons.data.save_data = MagicMock()
-    coresys_obj._store.save_data = MagicMock()
-    coresys_obj._mounts.save_data = MagicMock()
+    coresys_obj._ingress.save_data = AsyncMock()
+    coresys_obj._auth.save_data = AsyncMock()
+    coresys_obj._updater.save_data = AsyncMock()
+    coresys_obj._config.save_data = AsyncMock()
+    coresys_obj._jobs.save_data = AsyncMock()
+    coresys_obj._resolution.save_data = AsyncMock()
+    coresys_obj._addons.data.save_data = AsyncMock()
+    coresys_obj._store.save_data = AsyncMock()
+    coresys_obj._mounts.save_data = AsyncMock()
 
     # Mock test client
     coresys_obj._supervisor.instance._meta = {
-        "Config": {"Labels": {"io.hass.arch": "amd64"}}
+        "Config": {"Labels": {"io.hass.arch": "amd64"}},
+        "HostConfig": {"Privileged": True},
     }
     coresys_obj.arch._default_arch = "amd64"
     coresys_obj.arch._supported_set = {"amd64"}
@@ -389,9 +387,14 @@ async def coresys(
 
 
 @pytest.fixture
-def ha_ws_client(coresys: CoreSys) -> AsyncMock:
+async def ha_ws_client(coresys: CoreSys) -> AsyncMock:
     """Return HA WS client mock for assertions."""
-    return coresys.homeassistant.websocket._client
+    # Set Supervisor Core state to RUNNING, otherwise WS events won't be delivered
+    await coresys.core.set_state(CoreState.RUNNING)
+    await asyncio.sleep(0)
+    client = coresys.homeassistant.websocket._client
+    client.async_send_command.reset_mock()
+    return client
 
 
 @pytest.fixture
@@ -499,12 +502,14 @@ def store_manager(coresys: CoreSys):
 
 
 @pytest.fixture
-def run_dir(tmp_path):
-    """Fixture to inject hassio env."""
-    with patch("supervisor.core.RUN_SUPERVISOR_STATE") as mock_run:
-        tmp_state = Path(tmp_path, "supervisor")
-        mock_run.write_text = tmp_state.write_text
-        yield tmp_state
+def run_supervisor_state(request: pytest.FixtureRequest) -> Generator[MagicMock]:
+    """Fixture to simulate Supervisor state file in /run/supervisor."""
+    if getattr(request, "param", "test_file"):
+        with patch("supervisor.core.RUN_SUPERVISOR_STATE") as mock_run:
+            yield mock_run
+    else:
+        with patch("supervisor.core.Core._write_run_state") as mock_write_state:
+            yield mock_write_state
 
 
 @pytest.fixture
@@ -516,6 +521,7 @@ def store_addon(coresys: CoreSys, tmp_path, repository):
     coresys.store.data.addons[addon_obj.slug] = SCHEMA_ADDON_SYSTEM(
         load_json_fixture("add-on.json")
     )
+    coresys.store.data.addons[addon_obj.slug]["location"] = tmp_path
     yield addon_obj
 
 
@@ -549,10 +555,10 @@ async def repository(coresys: CoreSys):
 
 
 @pytest.fixture
-def install_addon_ssh(coresys: CoreSys, repository):
+async def install_addon_ssh(coresys: CoreSys, repository):
     """Install local_ssh add-on."""
     store = coresys.addons.store[TEST_ADDON_SLUG]
-    coresys.addons.data.install(store)
+    await coresys.addons.data.install(store)
     coresys.addons.data._data = coresys.addons.data._schema(coresys.addons.data._data)
 
     addon = Addon(coresys, store.slug)
@@ -561,10 +567,10 @@ def install_addon_ssh(coresys: CoreSys, repository):
 
 
 @pytest.fixture
-def install_addon_example(coresys: CoreSys, repository):
+async def install_addon_example(coresys: CoreSys, repository):
     """Install local_example add-on."""
     store = coresys.addons.store["local_example"]
-    coresys.addons.data.install(store)
+    await coresys.addons.data.install(store)
     coresys.addons.data._data = coresys.addons.data._schema(coresys.addons.data._data)
 
     addon = Addon(coresys, store.slug)

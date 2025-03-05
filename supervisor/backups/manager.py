@@ -36,7 +36,7 @@ from ..resolution.const import UnhealthyReason
 from ..utils.common import FileConfiguration
 from ..utils.dt import utcnow
 from ..utils.sentinel import DEFAULT
-from ..utils.sentry import capture_exception
+from ..utils.sentry import async_capture_exception
 from .backup import Backup
 from .const import (
     DEFAULT_FREEZE_TIMEOUT,
@@ -496,7 +496,7 @@ class BackupManager(FileConfiguration, JobGroup):
         addon_start_tasks: list[Awaitable[None]] | None = None
 
         try:
-            self.sys_core.state = CoreState.FREEZE
+            await self.sys_core.set_state(CoreState.FREEZE)
 
             async with backup.create():
                 # HomeAssistant Folder is for v1
@@ -525,7 +525,7 @@ class BackupManager(FileConfiguration, JobGroup):
             return None
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.exception("Backup %s error", backup.slug)
-            capture_exception(err)
+            await async_capture_exception(err)
             self.sys_jobs.current.capture_error(
                 BackupError(f"Backup {backup.slug} error, see supervisor logs")
             )
@@ -549,7 +549,7 @@ class BackupManager(FileConfiguration, JobGroup):
 
             return backup
         finally:
-            self.sys_core.state = CoreState.RUNNING
+            await self.sys_core.set_state(CoreState.RUNNING)
 
     @Job(
         name="backup_manager_full_backup",
@@ -718,7 +718,7 @@ class BackupManager(FileConfiguration, JobGroup):
             raise
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.exception("Restore %s error", backup.slug)
-            capture_exception(err)
+            await async_capture_exception(err)
             raise BackupError(
                 f"Restore {backup.slug} error, see supervisor logs"
             ) from err
@@ -808,7 +808,7 @@ class BackupManager(FileConfiguration, JobGroup):
             )
 
         _LOGGER.info("Full-Restore %s start", backup.slug)
-        self.sys_core.state = CoreState.FREEZE
+        await self.sys_core.set_state(CoreState.FREEZE)
 
         try:
             # Stop Home-Assistant / Add-ons
@@ -823,7 +823,7 @@ class BackupManager(FileConfiguration, JobGroup):
                 location=location,
             )
         finally:
-            self.sys_core.state = CoreState.RUNNING
+            await self.sys_core.set_state(CoreState.RUNNING)
 
         if success:
             _LOGGER.info("Full-Restore %s done", backup.slug)
@@ -878,7 +878,7 @@ class BackupManager(FileConfiguration, JobGroup):
             )
 
         _LOGGER.info("Partial-Restore %s start", backup.slug)
-        self.sys_core.state = CoreState.FREEZE
+        await self.sys_core.set_state(CoreState.FREEZE)
 
         try:
             success = await self._do_restore(
@@ -890,7 +890,7 @@ class BackupManager(FileConfiguration, JobGroup):
                 location=location,
             )
         finally:
-            self.sys_core.state = CoreState.RUNNING
+            await self.sys_core.set_state(CoreState.RUNNING)
 
         if success:
             _LOGGER.info("Partial-Restore %s done", backup.slug)
@@ -904,7 +904,7 @@ class BackupManager(FileConfiguration, JobGroup):
     )
     async def freeze_all(self, timeout: float = DEFAULT_FREEZE_TIMEOUT) -> None:
         """Freeze system to prepare for an external backup such as an image snapshot."""
-        self.sys_core.state = CoreState.FREEZE
+        await self.sys_core.set_state(CoreState.FREEZE)
 
         # Determine running addons
         installed = self.sys_addons.installed.copy()
@@ -957,7 +957,7 @@ class BackupManager(FileConfiguration, JobGroup):
                 if task
             ]
         finally:
-            self.sys_core.state = CoreState.RUNNING
+            await self.sys_core.set_state(CoreState.RUNNING)
             self._thaw_event.clear()
             self._thaw_task = None
 

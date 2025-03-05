@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -68,6 +69,24 @@ SCHEMA_ADD_REPOSITORY = vol.Schema(
 )
 
 
+def _read_static_text_file(path: Path) -> Any:
+    """Read in a static text file asset for API output.
+
+    Must be run in executor.
+    """
+    with path.open("r", errors="replace") as asset:
+        return asset.read()
+
+
+def _read_static_binary_file(path: Path) -> Any:
+    """Read in a static binary file asset for API output.
+
+    Must be run in executor.
+    """
+    with path.open("rb") as asset:
+        return asset.read()
+
+
 class APIStore(CoreSysAttributes):
     """Handle RESTful API for store functions."""
 
@@ -99,7 +118,7 @@ class APIStore(CoreSysAttributes):
 
         return self.sys_store.get(repository_slug)
 
-    def _generate_addon_information(
+    async def _generate_addon_information(
         self, addon: AddonStore, extended: bool = False
     ) -> dict[str, Any]:
         """Generate addon information."""
@@ -146,7 +165,7 @@ class APIStore(CoreSysAttributes):
                     ATTR_HOST_NETWORK: addon.host_network,
                     ATTR_HOST_PID: addon.host_pid,
                     ATTR_INGRESS: addon.with_ingress,
-                    ATTR_LONG_DESCRIPTION: addon.long_description,
+                    ATTR_LONG_DESCRIPTION: await addon.long_description(),
                     ATTR_RATING: rating_security(addon),
                     ATTR_SIGNED: addon.signed,
                 }
@@ -175,10 +194,12 @@ class APIStore(CoreSysAttributes):
     async def store_info(self, request: web.Request) -> dict[str, Any]:
         """Return store information."""
         return {
-            ATTR_ADDONS: [
-                self._generate_addon_information(self.sys_addons.store[addon])
-                for addon in self.sys_addons.store
-            ],
+            ATTR_ADDONS: await asyncio.gather(
+                *[
+                    self._generate_addon_information(self.sys_addons.store[addon])
+                    for addon in self.sys_addons.store
+                ]
+            ),
             ATTR_REPOSITORIES: [
                 self._generate_repository_information(repository)
                 for repository in self.sys_store.all
@@ -189,10 +210,12 @@ class APIStore(CoreSysAttributes):
     async def addons_list(self, request: web.Request) -> dict[str, Any]:
         """Return all store add-ons."""
         return {
-            ATTR_ADDONS: [
-                self._generate_addon_information(self.sys_addons.store[addon])
-                for addon in self.sys_addons.store
-            ]
+            ATTR_ADDONS: await asyncio.gather(
+                *[
+                    self._generate_addon_information(self.sys_addons.store[addon])
+                    for addon in self.sys_addons.store
+                ]
+            )
         }
 
     @api_process
@@ -224,7 +247,7 @@ class APIStore(CoreSysAttributes):
     async def addons_addon_info_wrapped(self, request: web.Request) -> dict[str, Any]:
         """Return add-on information directly (not api)."""
         addon: AddonStore = self._extract_addon(request)
-        return self._generate_addon_information(addon, True)
+        return await self._generate_addon_information(addon, True)
 
     @api_process_raw(CONTENT_TYPE_PNG)
     async def addons_addon_icon(self, request: web.Request) -> bytes:
@@ -233,8 +256,7 @@ class APIStore(CoreSysAttributes):
         if not addon.with_icon:
             raise APIError(f"No icon found for add-on {addon.slug}!")
 
-        with addon.path_icon.open("rb") as png:
-            return png.read()
+        return await self.sys_run_in_executor(_read_static_binary_file, addon.path_icon)
 
     @api_process_raw(CONTENT_TYPE_PNG)
     async def addons_addon_logo(self, request: web.Request) -> bytes:
@@ -243,8 +265,7 @@ class APIStore(CoreSysAttributes):
         if not addon.with_logo:
             raise APIError(f"No logo found for add-on {addon.slug}!")
 
-        with addon.path_logo.open("rb") as png:
-            return png.read()
+        return await self.sys_run_in_executor(_read_static_binary_file, addon.path_logo)
 
     @api_process_raw(CONTENT_TYPE_TEXT)
     async def addons_addon_changelog(self, request: web.Request) -> str:
@@ -258,8 +279,9 @@ class APIStore(CoreSysAttributes):
         if not addon.with_changelog:
             return f"No changelog found for add-on {addon.slug}!"
 
-        with addon.path_changelog.open("r") as changelog:
-            return changelog.read()
+        return await self.sys_run_in_executor(
+            _read_static_text_file, addon.path_changelog
+        )
 
     @api_process_raw(CONTENT_TYPE_TEXT)
     async def addons_addon_documentation(self, request: web.Request) -> str:
@@ -273,8 +295,9 @@ class APIStore(CoreSysAttributes):
         if not addon.with_documentation:
             return f"No documentation found for add-on {addon.slug}!"
 
-        with addon.path_documentation.open("r") as documentation:
-            return documentation.read()
+        return await self.sys_run_in_executor(
+            _read_static_text_file, addon.path_documentation
+        )
 
     @api_process
     async def repositories_list(self, request: web.Request) -> list[dict[str, Any]]:

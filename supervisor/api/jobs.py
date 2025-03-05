@@ -92,14 +92,14 @@ class APIJobs(CoreSysAttributes):
         if ATTR_IGNORE_CONDITIONS in body:
             self.sys_jobs.ignore_conditions = body[ATTR_IGNORE_CONDITIONS]
 
-        self.sys_jobs.save_data()
+        await self.sys_jobs.save_data()
 
         await self.sys_resolution.evaluate.evaluate_system()
 
     @api_process
     async def reset(self, request: web.Request) -> None:
         """Reset options for JobManager."""
-        self.sys_jobs.reset_data()
+        await self.sys_jobs.reset_data()
 
     @api_process
     async def job_info(self, request: web.Request) -> dict[str, Any]:

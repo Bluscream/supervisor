@@ -49,11 +49,11 @@ async def test_load(
 
     assert coresys.homeassistant.secrets.secrets == {"hello": "world"}
 
-    coresys.core.state = CoreState.SETUP
+    await coresys.core.set_state(CoreState.SETUP)
     await coresys.homeassistant.websocket.async_send_message({"lorem": "ipsum"})
     ha_ws_client.async_send_command.assert_not_called()
 
-    coresys.core.state = CoreState.RUNNING
+    await coresys.core.set_state(CoreState.RUNNING)
     await asyncio.sleep(0)
     assert ha_ws_client.async_send_command.call_args_list[0][0][0] == {"lorem": "ipsum"}
 
@@ -66,21 +66,21 @@ async def test_get_users_none(coresys: CoreSys, ha_ws_client: AsyncMock):
     )
 
 
-def test_write_pulse_error(coresys: CoreSys, caplog: pytest.LogCaptureFixture):
+async def test_write_pulse_error(coresys: CoreSys, caplog: pytest.LogCaptureFixture):
     """Test errors writing pulse config."""
     with patch(
         "supervisor.homeassistant.module.Path.write_text",
         side_effect=(err := OSError()),
     ):
         err.errno = errno.EBUSY
-        coresys.homeassistant.write_pulse()
+        await coresys.homeassistant.write_pulse()
 
         assert "can't write pulse/client.config" in caplog.text
         assert coresys.core.healthy is True
 
         caplog.clear()
         err.errno = errno.EBADMSG
-        coresys.homeassistant.write_pulse()
+        await coresys.homeassistant.write_pulse()
 
         assert "can't write pulse/client.config" in caplog.text
         assert coresys.core.healthy is False

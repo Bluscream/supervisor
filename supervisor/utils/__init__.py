@@ -90,6 +90,7 @@ def remove_folder(
     Is needed to avoid issue with:
         - CAP_DAC_OVERRIDE
         - CAP_DAC_READ_SEARCH
+    Must be run in executor.
     """
     find_args = []
     if content_only:
@@ -106,8 +107,7 @@ def remove_folder(
     except OSError as err:
         _LOGGER.exception("Can't remove folder %s: %s", folder, err)
     except subprocess.CalledProcessError as procerr:
-        _LOGGER.error("Can't remove folder %s: %s", folder, procerr.stderr.strip())
-        raise procerr
+        _LOGGER.critical("Can't remove folder %s: %s", folder, procerr.stderr.strip())
 
 
 def remove_folder_with_excludes(
@@ -115,7 +115,10 @@ def remove_folder_with_excludes(
     excludes: list[str],
     tmp_dir: Path | None = None,
 ) -> None:
-    """Remove folder with excludes."""
+    """Remove folder with excludes.
+
+    Must be run in executor.
+    """
     with TemporaryDirectory(dir=tmp_dir) as temp_path:
         temp_path = Path(temp_path)
         moved_files: list[Path] = []

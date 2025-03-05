@@ -106,9 +106,9 @@ jobs:
 
       - name: Build wheels
         if: needs.init.outputs.requirements == 'true'
-        uses: home-assistant/wheels@2024.11.0
+        uses: home-assistant/wheels@2025.02.0
         with:
-          abi: cp312
+          abi: cp313
           tag: musllinux_1_2
           arch: ${{ matrix.arch }}
           wheels-key: ${{ secrets.WHEELS_KEY }}
@@ -160,7 +160,7 @@ jobs:
         run: echo "BUILD_ARGS=--test" >> $GITHUB_ENV
 
       - name: Build supervisor
-        uses: home-assistant/builder@2024.08.2
+        uses: home-assistant/builder@2025.02.0
         with:
           args: |
             $BUILD_ARGS \
@@ -207,7 +207,7 @@ jobs:
 
       - name: Build the Supervisor
         if: needs.init.outputs.publish != 'true'
-        uses: home-assistant/builder@2024.08.2
+        uses: home-assistant/builder@2025.02.0
         with:
           args: |
             --test \

@@ -20,7 +20,7 @@ from typing import Any, Final
 import aiohttp
 from awesomeversion import AwesomeVersionCompareException
 from deepmerge import Merger
-from securetar import atomic_contents_add, secure_path
+from securetar import AddFileError, atomic_contents_add, secure_path
 import voluptuous as vol
 from voluptuous.humanize import humanize_error
 
@@ -88,7 +88,7 @@ from ..store.addon import AddonStore
 from ..utils import check_port
 from ..utils.apparmor import adjust_profile
 from ..utils.json import read_json_file, write_json_file
-from ..utils.sentry import capture_exception
+from ..utils.sentry import async_capture_exception
 from .const import (
     WATCHDOG_MAX_ATTEMPTS,
     WATCHDOG_RETRY_SECONDS,
@@ -140,9 +140,7 @@ class Addon(AddonModel):
         super().__init__(coresys, slug)
         self.instance: DockerAddon = DockerAddon(coresys, self)
         self._state: AddonState = AddonState.UNKNOWN
-        self._manual_stop: bool = (
-            self.sys_hardware.helper.last_boot != self.sys_config.last_boot
-        )
+        self._manual_stop: bool = False
         self._listeners: list[EventListener] = []
         self._startup_event = asyncio.Event()
         self._startup_task: asyncio.Task | None = None
@@ -216,6 +214,10 @@ class Addon(AddonModel):
 
     async def load(self) -> None:
         """Async initialize of object."""
+        self._manual_stop = (
+            await self.sys_hardware.helper.last_boot() != self.sys_config.last_boot
+        )
+
         if self.is_detached:
             await super().refresh_path_cache()
 
@@ -243,7 +245,7 @@ class Addon(AddonModel):
                 await self.instance.install(self.version, default_image, arch=self.arch)
 
         self.persist[ATTR_IMAGE] = default_image
-        self.save_persist()
+        await self.save_persist()
 
     @property
     def ip_address(self) -> IPv4Address:
@@ -667,9 +669,9 @@ class Addon(AddonModel):
         """Is add-on loaded."""
         return bool(self._listeners)
 
-    def save_persist(self) -> None:
+    async def save_persist(self) -> None:
         """Save data of add-on."""
-        self.sys_addons.data.save_data()
+        await self.sys_addons.data.save_data()
 
     async def watchdog_application(self) -> bool:
         """Return True if application is running."""
@@ -720,7 +722,7 @@ class Addon(AddonModel):
 
         try:
             options = self.schema.validate(self.options)
-            write_json_file(self.path_options, options)
+            await self.sys_run_in_executor(write_json_file, self.path_options, options)
         except vol.Invalid as ex:
             _LOGGER.error(
                 "Add-on %s has invalid options: %s",
@@ -772,7 +774,7 @@ class Addon(AddonModel):
     )
     async def install(self) -> None:
         """Install and setup this addon."""
-        self.sys_addons.data.install(self.addon_store)
+        await self.sys_addons.data.install(self.addon_store)
         await self.load()
 
         if not self.path_data.is_dir():
@@ -790,7 +792,7 @@ class Addon(AddonModel):
                 self.latest_version, self.addon_store.image, arch=self.arch
             )
         except DockerError as err:
-            self.sys_addons.data.uninstall(self)
+            await self.sys_addons.data.uninstall(self)
             raise AddonsError() from err
 
         # Add to addon manager
@@ -839,23 +841,23 @@ class Addon(AddonModel):
 
         # Cleanup Ingress dynamic port assignment
         if self.with_ingress:
+            await self.sys_ingress.del_dynamic_port(self.slug)
             self.sys_create_task(self.sys_ingress.reload())
-            self.sys_ingress.del_dynamic_port(self.slug)
 
         # Cleanup discovery data
         for message in self.sys_discovery.list_messages:
             if message.addon != self.slug:
                 continue
-            self.sys_discovery.remove(message)
+            await self.sys_discovery.remove(message)
 
         # Cleanup services data
         for service in self.sys_services.list_services:
             if self.slug not in service.active:
                 continue
-            service.del_service_data(self)
+            await service.del_service_data(self)
 
         # Remove from addon manager
-        self.sys_addons.data.uninstall(self)
+        await self.sys_addons.data.uninstall(self)
         self.sys_addons.local.pop(self.slug)
 
     @Job(
@@ -884,7 +886,7 @@ class Addon(AddonModel):
 
         try:
             _LOGGER.info("Add-on '%s' successfully updated", self.slug)
-            self.sys_addons.data.update(store)
+            await self.sys_addons.data.update(store)
             await self._check_ingress_port()
 
             # Cleanup
@@ -925,7 +927,7 @@ class Addon(AddonModel):
             except DockerError as err:
                 raise AddonsError() from err
 
-            self.sys_addons.data.update(self.addon_store)
+            await self.sys_addons.data.update(self.addon_store)
             await self._check_ingress_port()
             _LOGGER.info("Add-on '%s' successfully rebuilt", self.slug)
 
@@ -938,19 +940,20 @@ class Addon(AddonModel):
             )
         return out
 
-    def write_pulse(self) -> None:
+    async def write_pulse(self) -> None:
         """Write asound config to file and return True on success."""
         pulse_config = self.sys_plugins.audio.pulse_client(
             input_profile=self.audio_input, output_profile=self.audio_output
         )
 
-        # Cleanup wrong maps
-        if self.path_pulse.is_dir():
-            shutil.rmtree(self.path_pulse, ignore_errors=True)
-
-        # Write pulse config
-        try:
+        def write_pulse_config():
+            # Cleanup wrong maps
+            if self.path_pulse.is_dir():
+                shutil.rmtree(self.path_pulse, ignore_errors=True)
             self.path_pulse.write_text(pulse_config, encoding="utf-8")
+
+        try:
+            await self.sys_run_in_executor(write_pulse_config)
         except OSError as err:
             if err.errno == errno.EBADMSG:
                 self.sys_resolution.unhealthy = UnhealthyReason.OSERROR_BAD_MESSAGE
@@ -977,11 +980,21 @@ class Addon(AddonModel):
             return
 
         # Need install/update
-        with TemporaryDirectory(dir=self.sys_config.path_tmp) as tmp_folder:
-            profile_file = Path(tmp_folder, "apparmor.txt")
+        tmp_folder: TemporaryDirectory | None = None
 
+        def install_update_profile() -> Path:
+            nonlocal tmp_folder
+            tmp_folder = TemporaryDirectory(dir=self.sys_config.path_tmp)
+            profile_file = Path(tmp_folder.name, "apparmor.txt")
             adjust_profile(self.slug, self.path_apparmor, profile_file)
+            return profile_file
+
+        try:
+            profile_file = await self.sys_run_in_executor(install_update_profile)
             await self.sys_host.apparmor.load_profile(self.slug, profile_file)
+        finally:
+            if tmp_folder:
+                await self.sys_run_in_executor(tmp_folder.cleanup)
 
     async def uninstall_apparmor(self) -> None:
         """Remove AppArmor profile for Add-on."""
@@ -1053,14 +1066,14 @@ class Addon(AddonModel):
 
         # Access Token
         self.persist[ATTR_ACCESS_TOKEN] = secrets.token_hex(56)
-        self.save_persist()
+        await self.save_persist()
 
         # Options
         await self.write_options()
 
         # Sound
         if self.with_audio:
-            self.write_pulse()
+            await self.write_pulse()
 
         def _check_addon_config_dir():
             if self.path_config.is_dir():
@@ -1327,7 +1340,7 @@ class Addon(AddonModel):
                 )
             )
             _LOGGER.info("Finish backup for addon %s", self.slug)
-        except (tarfile.TarError, OSError) as err:
+        except (tarfile.TarError, OSError, AddFileError) as err:
             raise AddonsError(
                 f"Can't write tarfile {tar_file}: {err}", _LOGGER.error
             ) from err
@@ -1398,7 +1411,7 @@ class Addon(AddonModel):
             # Restore local add-on information
             _LOGGER.info("Restore config for addon %s", self.slug)
             restore_image = self._image(data[ATTR_SYSTEM])
-            self.sys_addons.data.restore(
+            await self.sys_addons.data.restore(
                 self.slug, data[ATTR_USER], data[ATTR_SYSTEM], restore_image
             )
 
@@ -1520,7 +1533,7 @@ class Addon(AddonModel):
                 except AddonsError as err:
                     attempts = attempts + 1
                     _LOGGER.error("Watchdog restart of addon %s failed!", self.name)
-                    capture_exception(err)
+                    await async_capture_exception(err)
                 else:
                     break
 
