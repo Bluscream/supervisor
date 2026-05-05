@@ -771,10 +771,18 @@ class RestAPI(CoreSysAttributes):
         api_services = APIServices()
         api_services.coresys = self.coresys
 
+        if app is self.versions[AppVersion.V1]:
+            app.add_routes(
+                [web.get("/services/{service}", api_services.get_service_v1)]
+            )
+
+        if app is self.versions[AppVersion.V2]:
+            app.add_routes([web.get("/services/{service}", api_services.get_service)])
+
+        # Routes shared across versions
         app.add_routes(
             [
                 web.get("/services", api_services.list_services),
-                web.get("/services/{service}", api_services.get_service),
                 web.post("/services/{service}", api_services.set_service),
                 web.delete("/services/{service}", api_services.del_service),
             ]
@@ -785,10 +793,25 @@ class RestAPI(CoreSysAttributes):
         api_discovery = APIDiscovery()
         api_discovery.coresys = self.coresys
 
+        if app is self.versions[AppVersion.V1]:
+            app.add_routes(
+                [
+                    web.get("/discovery", api_discovery.list_discovery_v1),
+                    web.get("/discovery/{uuid}", api_discovery.get_discovery_v1),
+                ]
+            )
+
+        if app is self.versions[AppVersion.V2]:
+            app.add_routes(
+                [
+                    web.get("/discovery", api_discovery.list_discovery),
+                    web.get("/discovery/{uuid}", api_discovery.get_discovery),
+                ]
+            )
+
+        # Routes shared across versions
         app.add_routes(
             [
-                web.get("/discovery", api_discovery.list_discovery),
-                web.get("/discovery/{uuid}", api_discovery.get_discovery),
                 web.delete("/discovery/{uuid}", api_discovery.del_discovery),
                 web.post("/discovery", api_discovery.set_discovery),
             ]

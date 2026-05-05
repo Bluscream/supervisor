@@ -7,6 +7,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient
 import pytest
 
+from supervisor.addons.addon import App
 from supervisor.api import RestAPI
 from supervisor.const import REQUEST_FROM, FeatureFlag
 from supervisor.coresys import CoreSys
@@ -200,6 +201,38 @@ async def fixture_api_client_with_prefix(
     if request.param == "":
         return api_client, ""
     return api_client_v2, "/v2"
+
+
+@pytest.fixture(
+    name="app_api_client_with_prefix",
+    params=[pytest.param("", id="v1"), pytest.param("/v2", id="v2")],
+)
+async def fixture_app_api_client_with_prefix(
+    request: pytest.FixtureRequest,
+    aiohttp_client,
+    coresys: CoreSys,
+    install_app_ssh: App,
+) -> tuple[TestClient, str]:
+    """Fixture providing (client, path_prefix) for APIs on both v1 and v2 that require app-level credentials.
+
+    Unlike api_client_with_prefix (which uses homeassistant as REQUEST_FROM), this
+    fixture uses an installed app so endpoints with app-level access checks (e.g.
+    services_role, app.discovery) work correctly.
+    """
+    prefix: str = request.param
+    if prefix == "/v2":
+        coresys.config.set_feature_flag(FeatureFlag.SUPERVISOR_V2_API, True)
+
+    @web.middleware
+    async def _security_middleware(req: web.Request, handler: web.RequestHandler):
+        req[REQUEST_FROM] = install_app_ssh
+        return await handler(req)
+
+    api = RestAPI(coresys)
+    api.webapp = web.Application(middlewares=[_security_middleware])
+    api.start = AsyncMock()
+    await api.load()
+    return await aiohttp_client(api.webapp), prefix
 
 
 @pytest.fixture(

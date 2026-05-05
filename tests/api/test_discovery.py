@@ -12,19 +12,19 @@ from supervisor.coresys import CoreSys
 from supervisor.discovery import Message
 
 from tests.common import load_json_fixture
-from tests.const import TEST_ADDON_SLUG
 
 
-@pytest.mark.parametrize("api_client", ["local_ssh"], indirect=True)
 async def test_api_discovery_forbidden(
-    api_client: TestClient, caplog: pytest.LogCaptureFixture, install_app_ssh
+    app_api_client_with_prefix: tuple[TestClient, str],
+    caplog: pytest.LogCaptureFixture,
 ):
     """Test app sending discovery message for an unregistered service."""
+    api_client, prefix = app_api_client_with_prefix
     caplog.clear()
 
     with caplog.at_level(logging.ERROR):
         resp = await api_client.post(
-            "/discovery", json={"service": "mqtt", "config": {}}
+            f"{prefix}/discovery", json={"service": "mqtt", "config": {}}
         )
 
     assert resp.status == 403
@@ -59,17 +59,18 @@ async def test_api_list_discovery(
 
     await coresys.discovery.load()
     assert coresys.discovery.list_messages == [
-        Message(addon="core_mosquitto", service="mqtt", config=ANY, uuid=ANY),
-        Message(addon="local_ssh", service="adguard", config=ANY, uuid=ANY),
+        Message(app="core_mosquitto", service="mqtt", config=ANY, uuid=ANY),
+        Message(app="local_ssh", service="adguard", config=ANY, uuid=ANY),
     ]
 
     install_app_ssh.state = AppState.STARTED
     resp = await api_client.get(f"{prefix}/discovery")
     assert resp.status == 200
     result = await resp.json()
+    app_key = "app" if prefix == "/v2" else "addon"
     assert result["data"]["discovery"] == [
         {
-            "addon": "local_ssh",
+            app_key: "local_ssh",
             "service": "adguard",
             "config": ANY,
             "uuid": ANY,
@@ -83,18 +84,20 @@ async def test_api_list_discovery(
     assert result["data"]["discovery"] == []
 
 
-@pytest.mark.parametrize("api_client", [TEST_ADDON_SLUG], indirect=True)
 async def test_api_send_del_discovery(
-    api_client: TestClient,
+    app_api_client_with_prefix: tuple[TestClient, str],
     coresys: CoreSys,
     install_app_ssh: App,
     websession: MagicMock,
 ):
     """Test adding and removing discovery."""
+    api_client, prefix = app_api_client_with_prefix
     install_app_ssh.data["discovery"] = ["test"]
     coresys.homeassistant.api._ensure_access_token = AsyncMock()  # pylint: disable=protected-access
 
-    resp = await api_client.post("/discovery", json={"service": "test", "config": {}})
+    resp = await api_client.post(
+        f"{prefix}/discovery", json={"service": "test", "config": {}}
+    )
     assert resp.status == 200
     result = await resp.json()
     uuid = result["data"]["uuid"]
@@ -105,18 +108,18 @@ async def test_api_send_del_discovery(
         == f"http://172.30.32.1:8123/api/hassio_push/discovery/{uuid}"
     )
     assert coresys.websession.request.call_args.kwargs["json"] == {
-        "addon": TEST_ADDON_SLUG,
+        "addon": install_app_ssh.slug,
         "service": "test",
         "uuid": uuid,
     }
 
     message = coresys.discovery.get(uuid)
-    assert message.addon == TEST_ADDON_SLUG
+    assert message.app == install_app_ssh.slug
     assert message.service == "test"
     assert message.config == {}
 
     coresys.websession.request.reset_mock()
-    resp = await api_client.delete(f"/discovery/{uuid}")
+    resp = await api_client.delete(f"{prefix}/discovery/{uuid}")
     assert resp.status == 200
     coresys.websession.request.assert_called_once()
     assert coresys.websession.request.call_args.args[0] == "delete"
@@ -125,7 +128,7 @@ async def test_api_send_del_discovery(
         == f"http://172.30.32.1:8123/api/hassio_push/discovery/{uuid}"
     )
     assert coresys.websession.request.call_args.kwargs["json"] == {
-        "addon": TEST_ADDON_SLUG,
+        "addon": install_app_ssh.slug,
         "service": "test",
         "uuid": uuid,
     }
@@ -133,28 +136,66 @@ async def test_api_send_del_discovery(
     assert coresys.discovery.get(uuid) is None
 
 
-@pytest.mark.parametrize("api_client", [TEST_ADDON_SLUG], indirect=True)
-async def test_api_invalid_discovery(api_client: TestClient, install_app_ssh: App):
+async def test_api_invalid_discovery(
+    app_api_client_with_prefix: tuple[TestClient, str],
+    install_app_ssh: App,
+):
     """Test invalid discovery messages."""
+    api_client, prefix = app_api_client_with_prefix
     install_app_ssh.data["discovery"] = ["test"]
 
-    resp = await api_client.post("/discovery", json={"service": "test"})
+    resp = await api_client.post(f"{prefix}/discovery", json={"service": "test"})
     assert resp.status == 400
 
-    resp = await api_client.post("/discovery", json={"service": "test", "config": None})
+    resp = await api_client.post(
+        f"{prefix}/discovery", json={"service": "test", "config": None}
+    )
     assert resp.status == 400
 
 
-@pytest.mark.parametrize(
-    ("method", "url"),
-    [("get", "/discovery/bad"), ("delete", "/discovery/bad")],
-)
-async def test_discovery_not_found(
-    api_client_with_prefix: tuple[TestClient, str], method: str, url: str
+async def test_discovery_not_found_get(
+    api_client_with_prefix: tuple[TestClient, str],
 ):
-    """Test discovery not found error."""
+    """Test GET /discovery/{uuid} returns 404 for an unknown uuid."""
     api_client, prefix = api_client_with_prefix
-    resp = await api_client.request(method, f"{prefix}{url}")
+    resp = await api_client.get(f"{prefix}/discovery/bad")
     assert resp.status == 404
-    resp = await resp.json()
-    assert resp["message"] == "Discovery message not found"
+    body = await resp.json()
+    assert body["message"] == "Discovery message not found"
+
+
+async def test_discovery_not_found_delete(
+    app_api_client_with_prefix: tuple[TestClient, str],
+):
+    """Test DELETE /discovery/{uuid} returns 404 for an unknown uuid."""
+    api_client, prefix = app_api_client_with_prefix
+    resp = await api_client.delete(f"{prefix}/discovery/bad")
+    assert resp.status == 404
+    body = await resp.json()
+    assert body["message"] == "Discovery message not found"
+
+
+async def test_get_discovery_v1_v2_keys(
+    api_client_with_prefix: tuple[TestClient, str],
+    coresys: CoreSys,
+    install_app_ssh: App,
+):
+    """Test GET /discovery/{uuid} returns 'addon' key on V1 and 'app' key on V2."""
+    api_client, prefix = api_client_with_prefix
+
+    # Seed a discovery message directly (bypass the HA push)
+    message = await coresys.discovery.send(
+        install_app_ssh, "adguard", {"host": "127.0.0.1", "port": 3000}
+    )
+    uuid = message.uuid
+
+    resp = await api_client.get(f"{prefix}/discovery/{uuid}")
+    assert resp.status == 200
+    result = await resp.json()
+
+    app_key = "app" if prefix == "/v2" else "addon"
+    absent_key = "addon" if prefix == "/v2" else "app"
+    assert result["data"][app_key] == install_app_ssh.slug
+    assert absent_key not in result["data"]
+    assert result["data"]["service"] == "adguard"
+    assert result["data"]["uuid"] == uuid

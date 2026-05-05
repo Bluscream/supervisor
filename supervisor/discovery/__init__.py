@@ -8,7 +8,13 @@ from uuid import uuid4
 
 import attr
 
-from ..const import ATTR_CONFIG, ATTR_DISCOVERY, FILE_HASSIO_DISCOVERY
+from ..const import (
+    ATTR_ADDON,
+    ATTR_APP,
+    ATTR_CONFIG,
+    ATTR_DISCOVERY,
+    FILE_HASSIO_DISCOVERY,
+)
 from ..coresys import CoreSys, CoreSysAttributes
 from ..exceptions import HomeAssistantAPIError
 from ..utils.common import FileConfiguration
@@ -27,7 +33,7 @@ CMD_DEL = "delete"
 class Message:
     """Represent a single Discovery message."""
 
-    addon: str = attr.ib()
+    app: str = attr.ib()
     service: str = attr.ib()
     config: dict[str, Any] = attr.ib(eq=False)
     uuid: str = attr.ib(factory=lambda: uuid4().hex, eq=False)
@@ -105,7 +111,7 @@ class Discovery(CoreSysAttributes, FileConfiguration):
         _LOGGER.info(
             "Delete discovery to Home Assistant %s from %s",
             message.service,
-            message.addon,
+            message.app,
         )
         self.sys_create_task(self._push_discovery(message, CMD_DEL))
 
@@ -117,6 +123,8 @@ class Discovery(CoreSysAttributes, FileConfiguration):
 
         data = attr.asdict(message)
         data.pop(ATTR_CONFIG)
+        # Home Assistant expects the legacy "addon" key in the push payload.
+        data[ATTR_ADDON] = data.pop(ATTR_APP)
 
         try:
             async with self.sys_homeassistant.api.make_request(

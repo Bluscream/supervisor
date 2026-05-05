@@ -1,6 +1,7 @@
 """Common utils."""
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 import logging
 from pathlib import Path
@@ -60,10 +61,12 @@ def write_json_or_yaml_file(path: Path, data: dict) -> None:
 class FileConfiguration:
     """Baseclass for classes that uses configuration files, the files can be JSON/YAML."""
 
-    def __init__(self, file_path: Path | None, schema: vol.Schema):
+    def __init__(
+        self, file_path: Path | None, schema: vol.Schema | Callable[[dict], dict]
+    ):
         """Initialize hass object."""
         self._file: Path | None = file_path
-        self._schema: vol.Schema = schema
+        self._schema: vol.Schema | Callable[[dict], dict] = schema
         self._data: dict[str, Any] = _DEFAULT
 
     async def load_config(self) -> Self:

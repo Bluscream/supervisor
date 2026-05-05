@@ -7,6 +7,9 @@ from awesomeversion import AwesomeVersion
 import voluptuous as vol
 
 from .const import (
+    ATTR_ADDON,
+    ATTR_ADDONS_CUSTOM_LIST,
+    ATTR_APP,
     ATTR_APPS_CUSTOM_LIST,
     ATTR_AUDIO,
     ATTR_AUTO_UPDATE,
@@ -197,28 +200,40 @@ SCHEMA_UPDATER_CONFIG = vol.Schema(
 )
 
 
+def _migrate_supervisor_config(data: dict) -> dict:
+    """Migrate legacy 'addons_custom_list' key to 'apps_custom_list'."""
+    # 'addons_custom_list' deprecated as of 2026.05
+    if ATTR_ADDONS_CUSTOM_LIST in data and ATTR_APPS_CUSTOM_LIST not in data:
+        data = dict(data)
+        data[ATTR_APPS_CUSTOM_LIST] = data.pop(ATTR_ADDONS_CUSTOM_LIST)
+    return data
+
+
 # pylint: disable=no-value-for-parameter
-SCHEMA_SUPERVISOR_CONFIG = vol.Schema(
-    {
-        vol.Optional(ATTR_TIMEZONE): validate_timezone,
-        vol.Optional(ATTR_LAST_BOOT): str,
-        vol.Optional(
-            ATTR_VERSION, default=AwesomeVersion(SUPERVISOR_VERSION)
-        ): version_tag,
-        vol.Optional(ATTR_IMAGE): docker_image,
-        vol.Optional(ATTR_APPS_CUSTOM_LIST, default=[]): repositories,
-        vol.Optional(ATTR_WAIT_BOOT, default=5): wait_boot,
-        vol.Optional(ATTR_LOGGING, default=LogLevel.INFO): vol.Coerce(LogLevel),
-        vol.Optional(ATTR_DEBUG, default=False): vol.Boolean(),
-        vol.Optional(ATTR_DEBUG_BLOCK, default=False): vol.Boolean(),
-        vol.Optional(ATTR_DIAGNOSTICS, default=None): vol.Maybe(vol.Boolean()),
-        vol.Optional(ATTR_DETECT_BLOCKING_IO, default=False): vol.Boolean(),
-        vol.Optional(ATTR_COUNTRY): str,
-        vol.Optional(ATTR_FEATURE_FLAGS, default=dict): vol.Schema(
-            {vol.Coerce(FeatureFlag): vol.Boolean()}
-        ),
-    },
-    extra=vol.REMOVE_EXTRA,
+SCHEMA_SUPERVISOR_CONFIG = vol.All(
+    _migrate_supervisor_config,
+    vol.Schema(
+        {
+            vol.Optional(ATTR_TIMEZONE): validate_timezone,
+            vol.Optional(ATTR_LAST_BOOT): str,
+            vol.Optional(
+                ATTR_VERSION, default=AwesomeVersion(SUPERVISOR_VERSION)
+            ): version_tag,
+            vol.Optional(ATTR_IMAGE): docker_image,
+            vol.Optional(ATTR_APPS_CUSTOM_LIST, default=[]): repositories,
+            vol.Optional(ATTR_WAIT_BOOT, default=5): wait_boot,
+            vol.Optional(ATTR_LOGGING, default=LogLevel.INFO): vol.Coerce(LogLevel),
+            vol.Optional(ATTR_DEBUG, default=False): vol.Boolean(),
+            vol.Optional(ATTR_DEBUG_BLOCK, default=False): vol.Boolean(),
+            vol.Optional(ATTR_DIAGNOSTICS, default=None): vol.Maybe(vol.Boolean()),
+            vol.Optional(ATTR_DETECT_BLOCKING_IO, default=False): vol.Boolean(),
+            vol.Optional(ATTR_COUNTRY): str,
+            vol.Optional(ATTR_FEATURE_FLAGS, default=dict): vol.Schema(
+                {vol.Coerce(FeatureFlag): vol.Boolean()}
+            ),
+        },
+        extra=vol.REMOVE_EXTRA,
+    ),
 )
 
 
@@ -279,3 +294,12 @@ SCHEMA_SECURITY_CONFIG = vol.Schema(
     },
     extra=vol.REMOVE_EXTRA,
 )
+
+
+def migrate_addon_to_app(data: dict) -> dict:
+    """Migrate legacy 'addon' key to 'app' for backwards compatibility."""
+    # 'addon' field deprecated as of 2026.05
+    if ATTR_ADDON in data and ATTR_APP not in data:
+        data = dict(data)
+        data[ATTR_APP] = data.pop(ATTR_ADDON)
+    return data

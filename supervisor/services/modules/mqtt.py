@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from ...addons.addon import App
 from ...exceptions import ServiceAlreadyProvidedError, ServiceNotProvidedError
-from ...validate import network_port
+from ...validate import migrate_addon_to_app, network_port
 from ..const import (
     ATTR_APP,
     ATTR_HOST,
@@ -37,7 +37,10 @@ SCHEMA_SERVICE_MQTT = vol.Schema(
     }
 )
 
-SCHEMA_CONFIG_MQTT = SCHEMA_SERVICE_MQTT.extend({vol.Required(ATTR_APP): str})
+# 'addon' field deprecated as of 2026.05, replaced by 'app'
+SCHEMA_CONFIG_MQTT = vol.All(
+    migrate_addon_to_app, SCHEMA_SERVICE_MQTT.extend({vol.Required(ATTR_APP): str})
+)
 
 
 class MQTTService(ServiceInterface):

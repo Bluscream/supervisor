@@ -888,7 +888,7 @@ class App(AppModel):
 
         # Cleanup discovery data
         for message in self.sys_discovery.list_messages:
-            if message.addon != self.slug:
+            if message.app != self.slug:
                 continue
             await self.sys_discovery.remove(message)
 

@@ -14,6 +14,7 @@ from ..const import (
 )
 from ..coresys import CoreSysAttributes
 from ..exceptions import APIError, APIForbidden, APINotFound
+from ..services.const import ATTR_ADDON, ATTR_APP
 from .utils import api_process, api_validate
 
 
@@ -55,7 +56,7 @@ class APIServices(CoreSysAttributes):
 
     @api_process
     async def get_service(self, request: web.Request) -> dict[str, Any]:
-        """Read data into a service."""
+        """Read data for a service (v2: uses "app" key)."""
         service = self._extract_service(request)
 
         # Access
@@ -63,7 +64,22 @@ class APIServices(CoreSysAttributes):
 
         if not service.enabled:
             raise APIError("Service not enabled")
-        return service.get_service_data()
+        return dict(service.get_service_data())
+
+    @api_process
+    async def get_service_v1(self, request: web.Request) -> dict[str, Any]:
+        """Read data for a service (v1: uses "addon" key)."""
+        service = self._extract_service(request)
+
+        # Access
+        _check_access(request, service.slug)
+
+        if not service.enabled:
+            raise APIError("Service not enabled")
+        data = dict(service.get_service_data())
+        if ATTR_APP in data:
+            data[ATTR_ADDON] = data.pop(ATTR_APP)
+        return data
 
     @api_process
     async def del_service(self, request: web.Request) -> None:

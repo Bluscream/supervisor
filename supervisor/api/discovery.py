@@ -8,6 +8,7 @@ import voluptuous as vol
 
 from ..addons.addon import App
 from ..const import (
+    ATTR_ADDON,
     ATTR_APP,
     ATTR_CONFIG,
     ATTR_DISCOVERY,
@@ -42,34 +43,50 @@ class APIDiscovery(CoreSysAttributes):
             raise APINotFound("Discovery message not found")
         return message
 
-    @api_process
-    @require_home_assistant
-    async def list_discovery(self, request: web.Request) -> dict[str, Any]:
-        """Show registered and available services."""
-        # Get available discovery
-        discovery = [
-            {
-                ATTR_APP: message.addon,
-                ATTR_SERVICE: message.service,
-                ATTR_UUID: message.uuid,
-                ATTR_CONFIG: message.config,
-            }
-            for message in self.sys_discovery.list_messages
-            if (
-                discovered := self.sys_apps.get_local_only(
-                    message.addon,
-                )
-            )
-            and discovered.state == AppState.STARTED
-        ]
+    def _message_data(self, message: Message) -> dict[str, Any]:
+        """Return discovery message data in V2 format."""
+        return {
+            ATTR_APP: message.app,
+            ATTR_SERVICE: message.service,
+            ATTR_UUID: message.uuid,
+            ATTR_CONFIG: message.config,
+        }
 
-        # Get available services/apps
+    def _available_services(self) -> dict[str, list[str]]:
+        """Return available discovery services keyed by service name."""
         services: dict[str, list[str]] = {}
         for app in self.sys_apps.all:
             for name in app.discovery:
                 services.setdefault(name, []).append(app.slug)
+        return services
 
-        return {ATTR_DISCOVERY: discovery, ATTR_SERVICES: services}
+    def _list_messages(self) -> list[dict[str, Any]]:
+        """Return discovery messages for started apps in V2 format."""
+        return [
+            self._message_data(message)
+            for message in self.sys_discovery.list_messages
+            if (discovered := self.sys_apps.get_local_only(message.app))
+            and discovered.state == AppState.STARTED
+        ]
+
+    @api_process
+    @require_home_assistant
+    async def list_discovery(self, request: web.Request) -> dict[str, Any]:
+        """Show registered discovery (v2: uses "app" key)."""
+        return {
+            ATTR_DISCOVERY: self._list_messages(),
+            ATTR_SERVICES: self._available_services(),
+        }
+
+    @api_process
+    @require_home_assistant
+    async def list_discovery_v1(self, request: web.Request) -> dict[str, Any]:
+        """Show registered discovery (v1: uses "addon" key)."""
+        messages = [
+            {ATTR_ADDON: m[ATTR_APP], **{k: v for k, v in m.items() if k != ATTR_APP}}
+            for m in self._list_messages()
+        ]
+        return {ATTR_DISCOVERY: messages, ATTR_SERVICES: self._available_services()}
 
     @api_process
     async def set_discovery(self, request: web.Request) -> dict[str, str]:
@@ -97,15 +114,16 @@ class APIDiscovery(CoreSysAttributes):
     @api_process
     @require_home_assistant
     async def get_discovery(self, request: web.Request) -> dict[str, Any]:
-        """Read data into a discovery message."""
-        message = self._extract_message(request)
+        """Read a discovery message (v2: uses "app" key)."""
+        return self._message_data(self._extract_message(request))
 
-        return {
-            ATTR_APP: message.addon,
-            ATTR_SERVICE: message.service,
-            ATTR_UUID: message.uuid,
-            ATTR_CONFIG: message.config,
-        }
+    @api_process
+    @require_home_assistant
+    async def get_discovery_v1(self, request: web.Request) -> dict[str, Any]:
+        """Read a discovery message (v1: uses "addon" key)."""
+        data = self._message_data(self._extract_message(request))
+        data[ATTR_ADDON] = data.pop(ATTR_APP)
+        return data
 
     @api_process
     async def del_discovery(self, request: web.Request) -> None:
@@ -114,7 +132,7 @@ class APIDiscovery(CoreSysAttributes):
         app = request[REQUEST_FROM]
 
         # Permission
-        if message.addon != app.slug:
+        if message.app != app.slug:
             raise APIForbidden("Can't remove discovery message")
 
         await self.sys_discovery.remove(message)

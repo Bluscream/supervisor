@@ -4,6 +4,7 @@ import pytest
 import voluptuous as vol
 
 from supervisor import validate
+from supervisor.validate import SCHEMA_SUPERVISOR_CONFIG
 
 DNS_GOOD_V4 = [
     "dns://10.0.0.1",  # random local
@@ -131,3 +132,20 @@ def test_version_complex():
         assert validate.version_tag(version) == str(version)
 
     assert validate.version_tag(None) is None
+
+
+def test_supervisor_config_migration_addons_custom_list():
+    """Test that old 'addons_custom_list' key is migrated to 'apps_custom_list'."""
+    result = SCHEMA_SUPERVISOR_CONFIG(
+        {"addons_custom_list": ["https://example.com/repo"]}
+    )
+    assert result["apps_custom_list"] == ["https://example.com/repo"]
+    assert "addons_custom_list" not in result
+
+
+def test_supervisor_config_apps_custom_list_unchanged():
+    """Test that new 'apps_custom_list' key passes through unchanged."""
+    result = SCHEMA_SUPERVISOR_CONFIG(
+        {"apps_custom_list": ["https://example.com/repo"]}
+    )
+    assert result["apps_custom_list"] == ["https://example.com/repo"]

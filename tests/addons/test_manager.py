@@ -238,7 +238,7 @@ async def test_app_uninstall_removes_discovery(coresys: CoreSys, install_app_ssh
     message = await coresys.discovery.send(
         install_app_ssh, "mqtt", {"host": "localhost", "port": 1883}
     )
-    assert message.addon == TEST_ADDON_SLUG
+    assert message.app == TEST_ADDON_SLUG
     assert message.service == "mqtt"
     assert coresys.discovery.list_messages == [message]
 
